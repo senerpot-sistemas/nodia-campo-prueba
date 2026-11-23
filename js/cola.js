@@ -48,6 +48,13 @@ const Cola = {
       this.aplicar.gasto(r.gasto);
       return r;
     }
+    if (it.tipo === 'PRESUPUESTO') {
+      // Ítem de presupuesto: lo guarda NODIA (es la dueña del presupuesto). Idempotente por idLinea.
+      const r = await API.nodia('campoPresupuestoAgregar', it.datos);
+      if (!r.exito) throw new ErrorApi(r.mensaje || 'NODIA no aceptó este ítem.', 409);
+      this.aplicar.presupuesto(it.idProyecto, r);
+      return r;
+    }
     // EVENTO: primero NODIA (es quien cambia el estado del proyecto); después la bitácora propia de Campo.
     if (it.etapa !== 'CAMPO') {
       const r = await API.nodia('campoMarcar', { idProyecto: it.idProyecto, evento: it.datos.evento, idEvento: it.id, fechaHora: it.datos.fechaHora });

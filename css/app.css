@@ -199,6 +199,16 @@ input:focus, textarea:focus { outline: none; border-color: var(--primario); box-
 .ingreso-caja { background: var(--superficie); border-radius: 18px; padding: 20px 16px; display: flex; flex-direction: column; gap: 14px; }
 .ingreso-entorno { text-align: center; color: #FFE08A; font-size: 13px; font-weight: 700; }
 
+/* ── presupuesto ── */
+/* (No llamar a esto «.linea»: esa clase ya la usa la píldora «En línea» de la barra superior.) */
+.presu-linea { display: flex; align-items: center; gap: 10px; padding: 10px 0; border-bottom: 1px solid #EDF0F5; min-height: 56px; }
+.presu-linea:last-child { border-bottom: 0; }
+.presu-linea-centro { flex: 1; min-width: 0; display: flex; flex-direction: column; }
+.presu-total { display: flex; justify-content: space-between; align-items: baseline; gap: 10px; font-weight: 600; }
+.presu-total b { font-family: 'Montserrat', sans-serif; font-size: 24px; font-weight: 800; color: var(--oscuro); white-space: nowrap; }
+.detalles.sin-caja { background: none; box-shadow: none; padding: 0; }
+button.flotante { border: 0; cursor: pointer; }
+
 /* ── pendientes ── */
 .cola-item { display: flex; flex-direction: column; gap: 3px; padding: 10px 0; border-bottom: 1px solid #EDF0F5; }
 .cola-item:last-child { border-bottom: 0; }

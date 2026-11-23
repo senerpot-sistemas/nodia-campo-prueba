@@ -31,7 +31,7 @@ const BOTONES_POR_ESTADO = { POR_INICIAR: ['INICIO'], EN_PROGRESO: ['PAUSA', 'FI
 const E = {
   proyectos: [], gastos: [], totales: [], categorias: [], personas: [], adminProyectos: [],
   parametros: { horasEdicion: 24, avisoPresupuestoPct: 80, valorMaximo: 50000000, diasAtrasMax: 60 },
-  totalesPorEntregar: 0, ultimaSync: null, enLinea: navigator.onLine, cargando: false,
+  presupuestos: {}, totalesPorEntregar: 0, ultimaSync: null, enLinea: navigator.onLine, cargando: false,
   adminPestana: 'aprobar', adminFiltro: 'PENDIENTE', renderPendiente: false
 };
 let F = null; // formulario de gasto en curso
@@ -48,7 +48,7 @@ const claveCopia = () => 'copia_' + Sesion.datos.usuario;
 async function guardarCopia() {
   if (!Sesion.datos) return;
   const c = {};
-  ['proyectos', 'gastos', 'totales', 'categorias', 'personas', 'adminProyectos', 'parametros', 'totalesPorEntregar', 'ultimaSync'].forEach((k) => { c[k] = E[k]; });
+  ['proyectos', 'gastos', 'totales', 'categorias', 'personas', 'adminProyectos', 'parametros', 'presupuestos', 'totalesPorEntregar', 'ultimaSync'].forEach((k) => { c[k] = E[k]; });
   try { await Almacen.guardar(claveCopia(), c); } catch (e) { console.warn('No se pudo guardar la copia local', e); }
 }
 async function cargarCopia() {
@@ -160,7 +160,9 @@ function cifras(p) {
     else if (base.estado === 'APROBADO') aprobado += nuevo - base.total;
     else if (base.estado === 'PENDIENTE') pendiente += nuevo - base.total;
   });
-  const presupuesto = p.presupuestoTotal || 0, compras = p.comprasTotal || 0;
+  // Los ítems de presupuesto que esperan en la cola ya se suman, igual que los gastos.
+  const presuEnCola = Cola.porEnviar().filter((i) => i.tipo === 'PRESUPUESTO' && i.idProyecto === p.idProyecto).reduce((s, i) => s + Math.round(i.datos.cantidad * i.datos.costoUnitario), 0);
+  const presupuesto = (p.presupuestoTotal || 0) + presuEnCola, compras = p.comprasTotal || 0;
   const campo = aprobado + pendiente, gastado = compras + campo;
   const pct = presupuesto > 0 ? Math.round(gastado * 100 / presupuesto) : null;
   const nivel = pct === null ? 'sin' : pct > 100 ? 'pasado' : pct >= (E.parametros.avisoPresupuestoPct || 80) ? 'aviso' : 'bien';
@@ -181,6 +183,11 @@ Cola.aplicar.gasto = (g) => {
 Cola.aplicar.estadoProyecto = (id, r) => {
   const p = E.proyectos.find((x) => x.idProyecto === id);
   if (p) { p.estado = r.estado; p.fechaInicio = r.fechaInicio || p.fechaInicio; p.fechaFin = r.fechaFin || p.fechaFin; }
+};
+Cola.aplicar.presupuesto = (id, r) => {
+  const p = E.proyectos.find((x) => x.idProyecto === id);
+  if (p) p.presupuestoTotal = r.presupuestoTotal || 0;
+  E.presupuestos[id] = { lineas: r.lineas || [], presupuestoTotal: r.presupuestoTotal || 0, cuando: new Date().toISOString() };
 };
 Cola.alCambiar = () => renderSuave();
 Cola.alQuedarEnEspera = () => aviso('Sin conexión: quedó guardado en el teléfono y se enviará solo.', 'alerta');
@@ -376,7 +383,7 @@ function vistaProyecto(id) {
     filasCampo(c) +
     '<tr class="fuerte"><td>Total gastado</td><td>' + moneda(c.gastado) + '</td></tr>' +
     (c.nivel === 'sin' ? '' : '<tr class="' + (c.disponible < 0 ? 'rojo' : '') + '"><td>' + (c.disponible < 0 ? 'Sobrecosto' : 'Disponible') + '</td><td>' + moneda(Math.abs(c.disponible)) + '</td></tr>') +
-    '</table></div>' +
+    '</table><a class="btn" href="#/presupuesto/' + encodeURIComponent(p.idProyecto) + '">📋 Ver presupuesto · agregar ítem</a></div>' +
 
     '<div class="tarjeta"><h2>Gastos del proyecto</h2>' + lista + '</div>' +
     '</main>' +
@@ -552,6 +559,88 @@ function verGasto(idProyecto, idGasto) {
     '<div class="hoja-botones">' + botones + '<button class="btn plano grande" data-accion="ventana-no">Cerrar</button></div>');
 }
 
+// ─────────────────────────── 4b. Presupuesto del proyecto ───────────────────────────
+const UNIDADES = ['un', 'día', 'global', 'viaje', 'm', 'hora'];
+
+/** Ítems de presupuesto que esperan en la cola (ya se cuentan en el presupuesto que ve el ingeniero). */
+function presupuestoEnCola(idProyecto) {
+  return Cola.mios().filter((i) => i.tipo === 'PRESUPUESTO' && i.idProyecto === idProyecto);
+}
+
+/** Trae de NODIA las líneas del presupuesto. Sin señal se muestra lo último guardado en el teléfono. */
+async function cargarPresupuesto(idProyecto) {
+  if (!Sesion.datos || Sesion.datos.debeCambiarClave || !idProyecto) return;
+  try {
+    const r = await API.nodia('campoPresupuestoListar', { idProyecto });
+    E.presupuestos[idProyecto] = { lineas: r.lineas || [], presupuestoTotal: r.presupuestoTotal || 0, cuando: new Date().toISOString() };
+    const p = E.proyectos.find((x) => x.idProyecto === idProyecto);
+    if (p) p.presupuestoTotal = r.presupuestoTotal || 0;
+    guardarCopia();
+    renderSuave();
+  } catch (e) {
+    if (!e.esRed && e.codigo !== 401) aviso(e.message, 'error');
+  }
+}
+
+function vistaPresupuesto(idProyecto) {
+  const p = E.proyectos.find((x) => x.idProyecto === idProyecto);
+  if (!p) return vistaProyecto(idProyecto);
+  const atras = '#/proyecto/' + encodeURIComponent(idProyecto);
+  const guardado = E.presupuestos[idProyecto];
+  const enCola = presupuestoEnCola(idProyecto);
+  const c = cifras(p);
+  const fila = (desc, cant, unidad, costo, total, marca) => '<div class="presu-linea"><span class="presu-linea-centro"><span class="gasto-cat">' + h(desc) + '</span>' +
+    '<span class="gasto-det">' + String(cant).replace('.', ',') + ' ' + h(unidad) + ' × ' + moneda(costo) + '</span></span>' +
+    '<span class="gasto-der"><span class="gasto-total">' + moneda(total) + '</span>' + (marca || '') + '</span></div>';
+  let lista = '';
+  if (guardado) lista += guardado.lineas.map((l) => fila(l.descripcion, l.cantidad, l.unidad, l.costoUnitario, l.total)).join('');
+  lista += enCola.map((i) => fila(i.datos.descripcion, i.datos.cantidad, i.datos.unidad, i.datos.costoUnitario, Math.round(i.datos.cantidad * i.datos.costoUnitario),
+    i.estado === 'RECHAZADO' ? '<span class="chip rechazado">❌ rechazado</span>' : '<span class="chip por-enviar">⏫ por enviar</span>')).join('');
+  if (!lista) lista = guardado ? '<div class="vacio chico">Este proyecto aún no tiene ítems de presupuesto.</div>'
+    : '<div class="vacio chico">' + (E.enLinea ? '⏳ Cargando el presupuesto…' : 'Sin conexión: el detalle se verá cuando vuelva la señal. Puede agregar ítems igual.') + '</div>';
+  return barraSuperior('Presupuesto', atras) + '<main class="con-flotante"><div class="tenue centro">' + h(p.nombre) + '</div>' +
+    '<div class="tarjeta"><div class="presu-total"><span>Presupuesto del proyecto</span><b>' + moneda(c.presupuesto) + '</b></div>' +
+    '<div class="tenue">Gastado hasta hoy: ' + moneda(c.gastado) + (c.pct === null ? '' : ' (' + c.pct + ' %)') + '</div></div>' +
+    '<div class="tarjeta"><h2>Ítems del presupuesto</h2>' + lista + '</div>' +
+    '<p class="tenue">Aquí puede agregar ítems. Para corregir o quitar uno, se hace en NODIA.</p></main>' +
+    '<button class="flotante" data-accion="presu-nuevo" data-id="' + h(idProyecto) + '">＋ Ítem de presupuesto</button>' + barraInferior('proyectos');
+}
+
+function abrirItemPresupuesto(idProyecto) {
+  const sugeridos = E.categorias.filter((x) => x.activo !== false).slice(0, 6);
+  Ventana.abrir('<h3>Nuevo ítem de presupuesto</h3>' +
+    '<label>Descripción<input type="text" id="pr-descripcion" maxlength="120" autocomplete="off" placeholder="Ej.: Mano de obra contratada"></label>' +
+    (sugeridos.length ? '<div class="fichas">' + sugeridos.map((x) => '<button class="ficha" data-accion="presu-sugerido" data-texto="' + h(x.nombre) + '">' + h(x.icono) + ' ' + h(x.nombre) + '</button>').join('') + '</div>' : '') +
+    '<div class="detalles sin-caja"><label>Cantidad<input type="number" id="pr-cantidad" inputmode="decimal" min="0.01" step="0.01" value="1"></label>' +
+    '<label>Costo unitario ($)<input type="text" id="pr-costo" inputmode="numeric" autocomplete="off" placeholder="0"></label></div>' +
+    '<div class="campo-titulo">Unidad</div><div class="fichas" id="pr-unidades">' + UNIDADES.map((u, i) => '<button class="ficha' + (i === 0 ? ' elegida' : '') + '" data-accion="presu-unidad" data-unidad="' + u + '">' + u + '</button>').join('') + '</div>' +
+    '<div class="presu-total"><span>Total del ítem</span><b id="pr-total">$ 0</b></div>' +
+    '<div class="hoja-botones"><button class="btn exito grande" data-accion="presu-guardar" data-id="' + h(idProyecto) + '">✓ Agregar al presupuesto</button><button class="btn plano grande" data-accion="ventana-no">Cancelar</button></div>');
+}
+const soloDigitos = (t) => String(t || '').replace(/\D/g, '').replace(/^0+/, '').slice(0, 10);
+function pintarTotalItem() {
+  const costo = $('#pr-costo'), cant = $('#pr-cantidad'), total = $('#pr-total');
+  if (!costo || !total) return;
+  const d = soloDigitos(costo.value);
+  costo.value = d ? miles(d) : '';
+  total.textContent = moneda(Math.round((Number(String(cant.value).replace(',', '.')) || 0) * Number(d || 0)));
+}
+async function guardarItemPresupuesto(idProyecto) {
+  const descripcion = ($('#pr-descripcion').value || '').replace(/\s+/g, ' ').trim();
+  const cantidad = Math.round((Number(String($('#pr-cantidad').value).replace(',', '.')) || 0) * 100) / 100;
+  const costoUnitario = Number(soloDigitos($('#pr-costo').value) || 0);
+  const elegida = $('#pr-unidades .elegida');
+  const unidad = elegida ? elegida.dataset.unidad : 'un';
+  if (descripcion.length < 3) return aviso('Escriba la descripción del ítem.', 'error');
+  if (!(cantidad > 0)) return aviso('La cantidad debe ser mayor que cero.', 'error');
+  if (!(costoUnitario > 0)) return aviso('Escriba el costo unitario.', 'error');
+  const idLinea = nuevoUuid();
+  Ventana.cerrar(false);
+  await Cola.poner({ id: idLinea, tipo: 'PRESUPUESTO', idProyecto, datos: { idProyecto, idLinea, descripcion, unidad, cantidad, costoUnitario } });
+  aviso(E.enLinea && navigator.onLine ? 'Ítem agregado al presupuesto.' : 'Ítem guardado en el teléfono. Se enviará al volver la señal.');
+  Cola.procesar({ forzar: true });
+}
+
 // ─────────────────────────── 5. Pendientes de enviar ───────────────────────────
 function vistaPendientes() {
   const mios = Cola.mios(), ajenos = Cola.ajenos();
@@ -559,6 +648,7 @@ function vistaPendientes() {
     const p = proyecto(i.idProyecto);
     let titulo, valor = '';
     if (i.tipo === 'GASTO') { const c = categoria(i.datos.categoria); titulo = c.icono + ' ' + c.nombre; valor = moneda(Math.round(i.datos.cantidad * i.datos.valorUnitario)); }
+    else if (i.tipo === 'PRESUPUESTO') { titulo = '📋 Ítem de presupuesto: ' + i.datos.descripcion; valor = moneda(Math.round(i.datos.cantidad * i.datos.costoUnitario)); }
     else titulo = '🕒 ' + EVENTOS[i.datos.evento].hecho + ' del proyecto';
     let estado;
     if (i.estado === 'RECHAZADO') estado = '<span class="cola-estado rechazado">❌ Rechazado: ' + h(i.ultimoError) + '</span>';
@@ -693,6 +783,7 @@ async function salir() {
 function cerrarSesionLocal(mensaje) {
   Sesion.cerrar();
   ['proyectos', 'gastos', 'totales', 'adminProyectos'].forEach((k) => { E[k] = []; });
+  E.presupuestos = {};
   E.ultimaSync = null; F = null;
   if (Ventana.abierta()) Ventana.cerrar(false);
   location.hash = '';
@@ -714,6 +805,7 @@ function render() {
   switch (r[0]) {
     case 'proyecto': html = vistaProyecto(r[1]); break;
     case 'gasto': html = vistaGasto(r[1], r[2]); break;
+    case 'presupuesto': html = vistaPresupuesto(r[1]); break;
     case 'pendientes': html = vistaPendientes(); break;
     case 'admin': html = vistaAdmin(); break;
     case 'cuenta': html = vistaCuenta(); break;
@@ -736,6 +828,7 @@ document.addEventListener('submit', (ev) => {
 });
 
 document.addEventListener('input', (ev) => {
+  if (ev.target.id === 'pr-costo' || ev.target.id === 'pr-cantidad') { pintarTotalItem(); return; }
   if (!F) return;
   const t = ev.target;
   if (t.id === 'g-persona') { F.pagadoA = t.value; document.querySelectorAll('[data-accion="persona"]').forEach((b) => b.classList.remove('elegida')); }
@@ -782,6 +875,10 @@ document.addEventListener('click', async (ev) => {
     case 'mas': F.mas = !F.mas; render(); break;
     case 'gasto-guardar': guardarGasto(); break;
     case 'cola-enviar': Cola.procesar({ forzar: true }); break;
+    case 'presu-nuevo': abrirItemPresupuesto(d.id); break;
+    case 'presu-sugerido': $('#pr-descripcion').value = d.texto; break;
+    case 'presu-unidad': document.querySelectorAll('#pr-unidades .ficha').forEach((b) => b.classList.remove('elegida')); el.classList.add('elegida'); break;
+    case 'presu-guardar': guardarItemPresupuesto(d.id); break;
     case 'cola-descartar': {
       if (Ventana.abierta()) Ventana.cerrar(false);
       const si = await Ventana.confirmar({ titulo: '¿Descartar este registro?', texto: 'El servidor lo rechazó. Si lo descarta, se quita de este teléfono.', si: 'Descartar', peligro: true });
@@ -842,7 +939,12 @@ document.addEventListener('click', async (ev) => {
   }
 });
 
-window.addEventListener('hashchange', () => { if (Ventana.abierta()) Ventana.cerrar(false); render(); window.scrollTo(0, 0); });
+window.addEventListener('hashchange', () => {
+  if (Ventana.abierta()) Ventana.cerrar(false);
+  render(); window.scrollTo(0, 0);
+  const r = ruta();
+  if (r[0] === 'presupuesto') cargarPresupuesto(r[1]);
+});
 window.addEventListener('online', () => { E.enLinea = true; renderSuave(); Cola.procesar({ forzar: true }); refrescar({ silencioso: true }); });
 window.addEventListener('offline', () => { E.enLinea = false; renderSuave(); });
 document.addEventListener('visibilitychange', () => { if (!document.hidden && Sesion.datos) { Cola.procesar({ forzar: true }); refrescar({ silencioso: true }); } });
@@ -857,5 +959,10 @@ API.alVencerSesion = () => { if (Sesion.datos) cerrarSesionLocal('Su sesión ven
   try { await Cola.cargar(); } catch (e) { console.warn('No se pudo leer la cola', e); }
   if (Sesion.datos) await cargarCopia();
   render();
-  if (Sesion.datos && !Sesion.datos.debeCambiarClave) { await refrescar({ silencioso: true }); Cola.procesar({ forzar: true }); }
+  if (Sesion.datos && !Sesion.datos.debeCambiarClave) {
+    await refrescar({ silencioso: true });
+    Cola.procesar({ forzar: true });
+    const r0 = ruta();
+    if (r0[0] === 'presupuesto') cargarPresupuesto(r0[1]);
+  }
 })();
