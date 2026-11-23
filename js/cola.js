@@ -67,7 +67,7 @@ const Cola = {
   /** Envía en orden. Si no hay señal, se detiene (para no desordenar) y vuelve a intentar más tarde. */
   async procesar(opciones) {
     const forzar = opciones && opciones.forzar;
-    if (this.ocupada || !Sesion.datos) return;
+    if (this.ocupada || !Sesion.datos || Sesion.datos.debeCambiarClave) return;
     this.ocupada = true;
     let huboEnvio = false, huboCambio = false;
     try {

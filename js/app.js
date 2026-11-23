@@ -35,6 +35,10 @@ const E = {
   adminPestana: 'aprobar', adminFiltro: 'PENDIENTE', renderPendiente: false
 };
 let F = null; // formulario de gasto en curso
+let claveReciente = ''; // la clave temporal recién escrita: solo en memoria, para no pedirla dos veces
+
+/** ¿Los gastos pasan por aprobación? Por decisión de Gerson, normalmente NO: lo registrado ya cuenta. */
+const conAprobacion = () => !!E.parametros.requiereAprobacion;
 
 const esAdmin = () => !!Sesion.datos && Sesion.datos.rol === 'ADMINISTRADOR';
 const categoria = (codigo) => E.categorias.find((c) => c.codigo === codigo) || { codigo, nombre: codigo, icono: '📦', pidePersona: false, activo: true };
@@ -98,7 +102,7 @@ const Ventana = {
 
 // ─────────────────────────── datos: traer, mezclar con la cola ───────────────────────────
 async function refrescar(opciones) {
-  if (!Sesion.datos || E.cargando) return;
+  if (!Sesion.datos || Sesion.datos.debeCambiarClave || E.cargando) return;
   E.cargando = true;
   if (!(opciones && opciones.silencioso)) renderSuave();
   const [rp, rs] = await Promise.allSettled([API.nodia('campoMisProyectos', {}), API.campo('sincronizar', {})]);
@@ -236,7 +240,9 @@ async function ingresar(form) {
     const r = await API.nodia('campoLogin', { usuario, password: clave }, { sinToken: true });
     if (!r.exito) { aviso(r.mensaje || 'Usuario o contraseña incorrectos.', 'error'); return; }
     Sesion.abrir(r);
+    claveReciente = r.debeCambiarClave ? clave : '';
     form.reset();
+    if (r.debeCambiarClave) { location.hash = ''; render(); return; }
     await cargarCopia();
     location.hash = '#/proyectos';
     render();
@@ -247,6 +253,49 @@ async function ingresar(form) {
   } finally {
     const b = $('#in-boton');
     if (b) { b.disabled = false; b.textContent = 'Ingresar'; }
+  }
+}
+
+// ─────────────────────────── 1b. Crear su propia contraseña (clave temporal) ───────────────────────────
+function vistaCambiarClave() {
+  const s = Sesion.datos;
+  return '<div class="ingreso"><div class="ingreso-marca"><img src="img/nodia-symbol.png" alt="" width="72" height="72"><h1>NODIA <span>Campo</span></h1></div>' +
+    '<form class="ingreso-caja" data-form="clave" autocomplete="off">' +
+    '<h2>Hola, ' + h(s.nombre) + '</h2>' +
+    '<p>Entró con una <b>contraseña temporal</b>. Antes de continuar, cree la suya: será su contraseña de NODIA y de NODIA Campo.</p>' +
+    (claveReciente ? '' : '<label>Contraseña temporal<input id="cl-actual" type="password" autocomplete="off" required></label>') +
+    '<label>Contraseña nueva<input id="cl-nueva" type="password" autocomplete="new-password" minlength="8" required></label>' +
+    '<label>Repítala<input id="cl-repite" type="password" autocomplete="new-password" minlength="8" required></label>' +
+    '<p class="tenue">Mínimo 8 caracteres, con letras y números. No la comparta.</p>' +
+    '<button class="btn primario grande" type="submit" id="cl-boton">Guardar mi contraseña</button>' +
+    '<button class="btn plano grande" type="button" data-accion="salir-directo">Salir</button>' +
+    '</form></div>';
+}
+async function cambiarClave() {
+  const boton = $('#cl-boton');
+  if (boton.disabled) return;
+  const actual = claveReciente || ($('#cl-actual') ? $('#cl-actual').value : '');
+  const nueva = $('#cl-nueva').value, repite = $('#cl-repite').value;
+  if (nueva !== repite) return aviso('Las dos contraseñas no son iguales.', 'error');
+  if (nueva.length < 8) return aviso('La contraseña debe tener al menos 8 caracteres.', 'error');
+  boton.disabled = true; boton.textContent = '⏳ Guardando…';
+  try {
+    const r = await API.nodia('campoCambiarClave', { claveActual: actual, claveNueva: nueva });
+    if (!r.exito) { aviso(r.mensaje || 'No se pudo cambiar la contraseña.', 'error'); return; }
+    claveReciente = '';
+    Sesion.datos.debeCambiarClave = false;
+    Sesion.abrir(Sesion.datos);
+    await cargarCopia();
+    location.hash = '#/proyectos';
+    render();
+    aviso('Contraseña guardada. Desde ahora use la suya.');
+    await refrescar();
+    Cola.procesar({ forzar: true });
+  } catch (e) {
+    if (e.codigo !== 401) aviso(e.esRed ? 'Sin conexión. Para cambiar la contraseña se necesita señal.' : e.message, 'error');
+  } finally {
+    const b = $('#cl-boton');
+    if (b) { b.disabled = false; b.textContent = 'Guardar mi contraseña'; }
   }
 }
 
@@ -279,9 +328,9 @@ function filaGasto(g, conAutor) {
   let marca = '';
   if (g.enCola === 'RECHAZADO') marca = '<span class="chip rechazado">❌ rechazado</span>';
   else if (g.enCola) marca = '<span class="chip por-enviar">⏫ por enviar</span>';
-  else if (g.estado === 'APROBADO') marca = '<span class="chip aprobado">✓ aprobado</span>';
   else if (g.estado === 'ANULADO') marca = '<span class="chip anulado">anulado</span>';
-  else marca = '<span class="chip pendiente">por aprobar</span>';
+  else if (g.estado === 'PENDIENTE') marca = '<span class="chip pendiente">por aprobar</span>';
+  else if (conAprobacion()) marca = '<span class="chip aprobado">✓ aprobado</span>';
   return '<button class="gasto' + (g.estado === 'ANULADO' ? ' es-anulado' : '') + '" data-accion="gasto-ver" data-id="' + h(g.idGasto) + '" data-proyecto="' + h(g.idProyecto) + '">' +
     '<span class="gasto-icono">' + h(cat.icono) + '</span>' +
     '<span class="gasto-centro"><span class="gasto-cat">' + h(cat.nombre) + (g.cantidad && g.cantidad !== 1 ? ' <span class="tenue">× ' + String(g.cantidad).replace('.', ',') + '</span>' : '') + '</span>' +
@@ -324,8 +373,7 @@ function vistaProyecto(id) {
     '<table class="cifras">' +
     '<tr><td>Presupuesto</td><td>' + (c.nivel === 'sin' ? '<span class="tenue">sin cargar</span>' : moneda(c.presupuesto)) + '</td></tr>' +
     '<tr><td>Compras (NODIA)</td><td>' + moneda(c.compras) + '</td></tr>' +
-    '<tr><td>Gastos de campo aprobados</td><td>' + moneda(c.aprobado) + '</td></tr>' +
-    '<tr><td>Gastos de campo por aprobar</td><td>' + moneda(c.pendiente) + '</td></tr>' +
+    filasCampo(c) +
     '<tr class="fuerte"><td>Total gastado</td><td>' + moneda(c.gastado) + '</td></tr>' +
     (c.nivel === 'sin' ? '' : '<tr class="' + (c.disponible < 0 ? 'rojo' : '') + '"><td>' + (c.disponible < 0 ? 'Sobrecosto' : 'Disponible') + '</td><td>' + moneda(Math.abs(c.disponible)) + '</td></tr>') +
     '</table></div>' +
@@ -333,6 +381,12 @@ function vistaProyecto(id) {
     '<div class="tarjeta"><h2>Gastos del proyecto</h2>' + lista + '</div>' +
     '</main>' +
     '<a class="flotante" href="#/gasto/' + encodeURIComponent(p.idProyecto) + '">＋ Gasto</a>' + barraInferior('proyectos');
+}
+
+/** Filas de «gastos de campo» del resumen: una sola si no hay aprobación; dos si la hay o quedó algo pendiente. */
+function filasCampo(c) {
+  if (!conAprobacion() && !c.pendiente) return '<tr><td>Gastos de campo</td><td>' + moneda(c.campo) + '</td></tr>';
+  return '<tr><td>Gastos de campo aprobados</td><td>' + moneda(c.aprobado) + '</td></tr><tr><td>Gastos de campo por aprobar</td><td>' + moneda(c.pendiente) + '</td></tr>';
 }
 
 async function marcar(idProyecto, evento) {
@@ -479,7 +533,7 @@ function verGasto(idProyecto, idGasto) {
   if (!g) return;
   const cat = categoria(g.categoria), p = proyecto(g.idProyecto);
   const estado = g.enCola === 'RECHAZADO' ? '❌ Rechazado por el servidor: ' + h(g.errorCola || '') : g.enCola ? '⏫ Guardado en el teléfono, por enviar'
-    : g.estado === 'APROBADO' ? '✓ Aprobado por ' + h(g.revisadoPor) : g.estado === 'ANULADO' ? 'Anulado por ' + h(g.revisadoPor) + '. Motivo: ' + h(g.motivoAnulacion) : 'Por aprobar';
+    : g.estado === 'APROBADO' ? (g.revisadoPor ? '✓ Aprobado por ' + h(g.revisadoPor) : 'Registrado') : g.estado === 'ANULADO' ? 'Anulado por ' + h(g.revisadoPor) + '. Motivo: ' + h(g.motivoAnulacion) : 'Por aprobar';
   const fila = (a, b) => b ? '<tr><td>' + a + '</td><td>' + b + '</td></tr>' : '';
   let botones = '';
   const editableAqui = g.editable && E.proyectos.some((x) => x.idProyecto === g.idProyecto);
@@ -489,7 +543,7 @@ function verGasto(idProyecto, idGasto) {
     if (g.estado === 'PENDIENTE') botones += '<button class="btn exito grande" data-accion="admin-aprobar" data-id="' + h(g.idGasto) + '">✓ Aprobar</button>';
     if (g.estado !== 'ANULADO') botones += '<button class="btn peligro grande" data-accion="admin-anular" data-id="' + h(g.idGasto) + '">✕ Anular</button>';
   }
-  const noEditable = !g.editable && !esAdmin() && g.estado === 'PENDIENTE' ? '<p class="tenue">Ya pasaron ' + (E.parametros.horasEdicion || 24) + ' horas: para corregirlo, pídale el cambio al administrador.</p>' : '';
+  const noEditable = !g.editable && !esAdmin() && !g.enCola && g.estado !== 'ANULADO' && !(conAprobacion() && g.estado === 'APROBADO') ? '<p class="tenue">Ya pasaron ' + (E.parametros.horasEdicion || 24) + ' horas: para corregirlo, pídale el cambio al administrador.</p>' : '';
   Ventana.abrir('<h3>' + h(cat.icono) + ' ' + h(cat.nombre) + '</h3><div class="detalle-total">' + moneda(g.total) + '</div>' +
     '<table class="cifras">' + fila('Proyecto', h(p ? p.nombre : g.idProyecto)) + fila('Fecha', h(fechaCorta(g.fecha))) +
     (g.cantidad !== 1 ? fila('Cantidad × valor', String(g.cantidad).replace('.', ',') + ' × ' + moneda(g.valorUnitario)) : '') +
@@ -530,14 +584,18 @@ function vistaAdmin() {
   const pest = (id, texto) => '<button class="' + (E.adminPestana === id ? 'activa' : '') + '" data-accion="admin-pestana" data-id="' + id + '">' + texto + '</button>';
   const nPend = E.gastos.filter((g) => g.estado === 'PENDIENTE').length;
   let cuerpo = '';
+  // Sin aprobación la lista es de revisión: «Registrados» (para corregir o anular) y «Anulados».
+  if (!conAprobacion() && !nPend && E.adminFiltro !== 'ANULADO') E.adminFiltro = 'ACTIVOS';
+  if ((conAprobacion() || nPend) && E.adminFiltro === 'ACTIVOS') E.adminFiltro = 'PENDIENTE';
 
   if (E.adminPestana === 'aprobar') {
     const filtro = (id, texto) => '<button class="' + (E.adminFiltro === id ? 'activa' : '') + '" data-accion="admin-filtro" data-id="' + id + '">' + texto + '</button>';
-    const lista = E.gastos.filter((g) => g.estado === E.adminFiltro);
+    const lista = E.gastos.filter((g) => E.adminFiltro === 'ACTIVOS' ? g.estado !== 'ANULADO' : g.estado === E.adminFiltro);
     const grupos = [];
     lista.forEach((g) => { let x = grupos.find((y) => y.id === g.idProyecto); if (!x) { x = { id: g.idProyecto, items: [] }; grupos.push(x); } x.items.push(g); });
-    cuerpo = '<div class="segmento chico">' + filtro('PENDIENTE', 'Por aprobar') + filtro('APROBADO', 'Aprobados') + filtro('ANULADO', 'Anulados') + '</div>';
-    if (!grupos.length) cuerpo += '<div class="vacio"><div class="vacio-icono">' + (E.adminFiltro === 'PENDIENTE' ? '✅' : '🗂️') + '</div><b>' + (E.adminFiltro === 'PENDIENTE' ? 'No hay gastos por aprobar' : 'No hay gastos en este estado') + '</b></div>';
+    cuerpo = '<div class="segmento chico">' + (E.adminFiltro === 'ACTIVOS' ? filtro('ACTIVOS', 'Registrados') : filtro('PENDIENTE', 'Por aprobar') + filtro('APROBADO', conAprobacion() ? 'Aprobados' : 'Registrados')) + filtro('ANULADO', 'Anulados') + '</div>' +
+      (conAprobacion() ? '' : '<p class="tenue">Los gastos cuentan desde que se registran. Aquí puede revisarlos, corregirlos (tocando el gasto) o anularlos.</p>');
+    if (!grupos.length) cuerpo += '<div class="vacio"><div class="vacio-icono">' + (E.adminFiltro === 'PENDIENTE' ? '✅' : '🗂️') + '</div><b>' + (E.adminFiltro === 'PENDIENTE' ? 'No hay gastos por aprobar' : E.adminFiltro === 'ACTIVOS' ? 'Aún no hay gastos registrados' : 'No hay gastos en este estado') + '</b></div>';
     cuerpo += grupos.map((gr) => {
       const p = proyecto(gr.id), total = gr.items.reduce((s, g) => s + g.total, 0);
       gr.items.sort((a, b) => (b.fecha + b.registradoEn).localeCompare(a.fecha + a.registradoEn));
@@ -556,7 +614,7 @@ function vistaAdmin() {
         const c = cifras(p);
         return '<div class="tarjeta"><b>' + h(p.nombre) + '</b><div class="tenue">' + h(id) + (p.tecnico ? ' · ' + h(p.tecnico) : '') + (p.estado ? ' · ' + h(NOMBRE_ESTADO[p.estado] || p.estado) : '') + '</div>' +
           '<table class="cifras"><tr><td>Presupuestado</td><td>' + moneda(c.presupuesto) + '</td></tr><tr><td>Compras (NODIA)</td><td>' + moneda(c.compras) + '</td></tr>' +
-          '<tr><td>Gastos de campo aprobados</td><td>' + moneda(c.aprobado) + '</td></tr><tr><td>Gastos de campo por aprobar</td><td>' + moneda(c.pendiente) + '</td></tr>' +
+          filasCampo(c) +
           '<tr class="fuerte"><td>Real total</td><td>' + moneda(c.gastado) + '</td></tr>' +
           '<tr class="' + (c.disponible < 0 ? 'rojo' : '') + '"><td>Diferencia</td><td>' + (c.disponible < 0 ? '− ' : '') + moneda(Math.abs(c.disponible)) + '</td></tr></table></div>';
       }).join('') || '<div class="vacio">Sin proyectos.</div>';
@@ -568,7 +626,10 @@ function vistaAdmin() {
       '<div class="tarjeta"><h2>Personas (mano de obra)</h2>' +
       (E.personas.map((x) => '<div class="catalogo' + (x.activo ? '' : ' inactivo') + '"><span class="catalogo-nombre">👤 ' + h(x.nombre) + (x.activo ? '' : ' <span class="chip anulado">inactiva</span>') + '</span>' +
         '<button class="btn mini" data-accion="persona-editar" data-id="' + h(x.idPersona) + '">Editar</button></div>').join('') || '<div class="tenue">Aún no hay personas.</div>') +
-      '<button class="btn primario" data-accion="persona-editar" data-id="">＋ Nueva persona</button></div>';
+      '<button class="btn primario" data-accion="persona-editar" data-id="">＋ Nueva persona</button></div>' +
+      '<div class="tarjeta"><h2>Ajustes</h2><div class="catalogo"><span class="catalogo-nombre">Aprobación de gastos<br><span class="tenue">' +
+      (conAprobacion() ? 'Activa: cada gasto queda «por aprobar» hasta que un administrador lo apruebe.' : 'Desactivada: lo que se registra cuenta de inmediato como gasto real.') + '</span></span>' +
+      '<button class="btn mini" data-accion="ajuste-aprobacion">' + (conAprobacion() ? 'Quitar' : 'Exigir') + '</button></div></div>';
   }
   return barraSuperior('Administración') + '<main><div class="segmento">' + pest('aprobar', 'Gastos' + (nPend ? ' (' + nPend + ')' : '')) + pest('totales', 'Totales') + pest('catalogos', 'Catálogos') + '</div>' + cuerpo + '</main>' + barraInferior('admin');
 }
@@ -646,6 +707,7 @@ function render() {
   E.renderPendiente = false;
   const app = $('#app');
   if (!Sesion.datos) { app.innerHTML = vistaIngreso(); return; }
+  if (Sesion.datos.debeCambiarClave) { app.innerHTML = vistaCambiarClave(); return; }
   const r = ruta();
   if (r[0] !== 'gasto') F = null;
   let html;
@@ -670,6 +732,7 @@ function renderSuave() {
 // ─────────────────────────── eventos de pantalla ───────────────────────────
 document.addEventListener('submit', (ev) => {
   if (ev.target.dataset.form === 'ingreso') { ev.preventDefault(); ingresar(ev.target); }
+  if (ev.target.dataset.form === 'clave') { ev.preventDefault(); cambiarClave(); }
 });
 
 document.addEventListener('input', (ev) => {
@@ -726,6 +789,16 @@ document.addEventListener('click', async (ev) => {
       break;
     }
     case 'salir': salir(); break;
+    case 'salir-directo': claveReciente = ''; try { await API.nodia('logout', {}); } catch (e) { /* se cierra igual en el teléfono */ } cerrarSesionLocal(); break;
+    case 'ajuste-aprobacion': {
+      const exigir = !conAprobacion();
+      const porAprobar = E.gastos.filter((g) => g.estado === 'PENDIENTE').length;
+      const si = await Ventana.confirmar(exigir
+        ? { titulo: '¿Exigir aprobación de los gastos?', texto: 'Desde ahora cada gasto nuevo quedará «por aprobar» hasta que un administrador lo apruebe.', si: 'Sí, exigir aprobación' }
+        : { titulo: '¿Quitar la aprobación?', texto: 'Lo que se registre contará de inmediato como gasto real.' + (porAprobar ? ' Los <b>' + porAprobar + '</b> gastos que están por aprobar quedarán aprobados.' : ''), si: 'Sí, quitar aprobación' });
+      if (si) accionAdmin(null, () => API.campo('ajustesGuardar', { requiereAprobacion: exigir }), 'Ajuste guardado.');
+      break;
+    }
     case 'admin-pestana': E.adminPestana = d.id; render(); break;
     case 'admin-filtro': E.adminFiltro = d.id; render(); break;
     case 'admin-aprobar': {
@@ -784,5 +857,5 @@ API.alVencerSesion = () => { if (Sesion.datos) cerrarSesionLocal('Su sesión ven
   try { await Cola.cargar(); } catch (e) { console.warn('No se pudo leer la cola', e); }
   if (Sesion.datos) await cargarCopia();
   render();
-  if (Sesion.datos) { await refrescar({ silencioso: true }); Cola.procesar({ forzar: true }); }
+  if (Sesion.datos && !Sesion.datos.debeCambiarClave) { await refrescar({ silencioso: true }); Cola.procesar({ forzar: true }); }
 })();

@@ -11,7 +11,7 @@ const Sesion = {
     return this.datos;
   },
   abrir(d) {
-    this.datos = { token: d.token, usuario: d.usuario, nombre: d.nombre, rol: d.rol, expiraEn: d.expiraEn };
+    this.datos = { token: d.token, usuario: d.usuario, nombre: d.nombre, rol: d.rol, expiraEn: d.expiraEn, debeCambiarClave: !!d.debeCambiarClave };
     localStorage.setItem('campo_sesion', JSON.stringify(this.datos));
   },
   cerrar() { this.datos = null; localStorage.removeItem('campo_sesion'); },
