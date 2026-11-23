@@ -214,12 +214,15 @@ function barraPresupuesto(c) {
 // ─────────────────────────── 1. Ingreso ───────────────────────────
 function vistaIngreso() {
   const ajenos = Cola.items.length;
+  const prueba = !!CONFIG.entorno;
   return '<div class="ingreso"><div class="ingreso-marca"><img src="img/nodia-symbol.png" alt="" width="84" height="84"><h1>NODIA <span>Campo</span></h1><p>Proyectos y gastos desde la obra</p></div>' +
     '<form class="ingreso-caja" data-form="ingreso" autocomplete="on">' +
-    '<label>Usuario<input id="in-usuario" name="username" type="text" autocomplete="username" autocapitalize="none" autocorrect="off" spellcheck="false" required></label>' +
-    '<label>Contraseña<input id="in-clave" name="password" type="password" autocomplete="current-password" required></label>' +
+    // En un sitio de PRUEBA los campos no se dejan rellenar solos: el navegador podría poner la clave real de NODIA.
+    '<label>Usuario<input id="in-usuario" type="text" ' + (prueba ? 'name="usuario-de-prueba" autocomplete="off" readonly data-sin-relleno' : 'name="username" autocomplete="username"') + ' autocapitalize="none" autocorrect="off" spellcheck="false" required></label>' +
+    '<label>Contraseña<input id="in-clave" type="password" ' + (prueba ? 'name="clave-de-prueba" autocomplete="new-password" readonly data-sin-relleno' : 'name="password" autocomplete="current-password"') + ' required></label>' +
     '<button class="btn primario grande" type="submit" id="in-boton">Ingresar</button>' +
-    '<p class="tenue centro">Use el mismo usuario y contraseña de NODIA. Para ingresar necesita conexión; después puede trabajar sin señal.</p>' +
+    (prueba ? '<p class="nota-cola centro"><b>Sitio de PRUEBA.</b> Use solo los usuarios de prueba. <b>No escriba su contraseña real de NODIA.</b></p>'
+      : '<p class="tenue centro">Use el mismo usuario y contraseña de NODIA. Para ingresar necesita conexión; después puede trabajar sin señal.</p>') +
     (ajenos ? '<p class="nota-cola">📱 Este teléfono tiene ' + ajenos + ' registro(s) sin enviar. Se enviarán cuando ingrese quien los hizo.</p>' : '') +
     '</form>' + (CONFIG.entorno ? '<p class="ingreso-entorno">' + h(CONFIG.entorno) + ' · v' + h(CONFIG.version) + '</p>' : '') + '</div>';
 }
@@ -678,6 +681,11 @@ document.addEventListener('input', (ev) => {
   else if (t.id === 'g-fecha') F.fecha = t.value;
   else if (t.id === 'g-cantidad') { F.cantidad = t.value; pintarValor(); }
 });
+// Los campos protegidos contra el relleno automático se habilitan cuando la persona los toca.
+// (pointerdown ocurre antes del foco: así el teclado del celular abre al primer toque.)
+['pointerdown', 'focusin'].forEach((tipo) => document.addEventListener(tipo, (ev) => {
+  if (ev.target && ev.target.dataset && 'sinRelleno' in ev.target.dataset) ev.target.removeAttribute('readonly');
+}, true));
 document.addEventListener('focusout', () => { setTimeout(() => { if (E.renderPendiente) renderSuave(); }, 150); });
 
 document.addEventListener('click', async (ev) => {
