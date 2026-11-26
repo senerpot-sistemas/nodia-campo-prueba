@@ -207,7 +207,10 @@ function barraSuperior(titulo, atras) {
 function barraInferior(activa) {
   const n = Cola.mios().length;
   const item = (ruta, icono, texto, extra) => '<a href="#/' + ruta + '" class="' + (activa === ruta ? 'activa' : '') + '"><span class="nav-icono">' + icono + '</span><span>' + texto + '</span>' + (extra || '') + '</a>';
-  return '<nav class="nav">' + item('proyectos', '📋', 'Proyectos') + item('pendientes', '⏫', 'Por enviar', n ? '<b class="globo">' + n + '</b>' : '') +
+  // Dentro de la app Android, «Fotos» abre todas las carpetas del teléfono: las de los proyectos y las sueltas
+  // (una visita, una cotización, una prueba) que la persona crea sin que exista un proyecto en NODIA.
+  const fotos = enAppNativa() ? '<button type="button" data-accion="fotos-todas"><span class="nav-icono">📷</span><span>Fotos</span></button>' : '';
+  return '<nav class="nav">' + item('proyectos', '📋', 'Proyectos') + fotos + item('pendientes', '⏫', 'Por enviar', n ? '<b class="globo">' + n + '</b>' : '') +
     (esAdmin() ? item('admin', '🛠️', 'Administrar') : '') + item('cuenta', '👤', 'Cuenta') + '</nav>';
 }
 function chipEstado(estado, porEnviar) {
@@ -793,7 +796,7 @@ function vistaCuenta() {
     '<tr><td>Sesión válida hasta</td><td>' + (s.expiraEn ? h(horaLegible(new Date(s.expiraEn))) : '—') + '</td></tr>' +
     '<tr><td>Última actualización</td><td>' + (E.ultimaSync ? h(horaLegible(new Date(E.ultimaSync))) : '—') + '</td></tr>' +
     '<tr><td>Versión</td><td>' + h(CONFIG.version) + (CONFIG.entorno ? ' · ' + h(CONFIG.entorno) : '') + '</td></tr></table></div>' +
-    (enAppNativa() ? '<button class="btn primario grande" data-accion="fotos-todas">📷 Todas las fotos</button>' : '') +
+    (enAppNativa() ? '<button class="btn primario grande" data-accion="fotos-todas">📷 Todas las fotos y carpetas sueltas</button>' : '') +
     '<button class="btn primario grande" data-accion="refrescar">↻ Actualizar datos</button>' +
     '<button class="btn plano grande" data-accion="salir">Cerrar sesión</button>' +
     bloqueInstalar() + '</main>' + barraInferior('cuenta');
